@@ -39,7 +39,13 @@ export function initSockets(httpServer: HttpServer) {
   io.on("connection", (socket) => {
     logger.debug({ userId: socket.data.userId, walletToken: socket.data.walletToken }, "socket connected");
 
-    if (socket.data.role === "creator" && socket.data.userId) {
+    // Every signed-up user gets a creatorProfiles row at signup (see
+    // auth/routes.ts) and can receive gifts, regardless of their `role`
+    // (role is reserved for the separate streams/challenges RBAC gate and
+    // is never actually set to "creator" anywhere in this codebase — gating
+    // this join on it meant no authenticated user ever received their own
+    // NEW_GIFT_EVENT). Any authenticated socket joins its own creator room.
+    if (socket.data.userId) {
       socket.join(`creator:${socket.data.userId}`);
     }
 
