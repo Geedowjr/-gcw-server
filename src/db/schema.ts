@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   uuid,
@@ -99,12 +100,21 @@ export const kycSubmissions = pgTable("kyc_submissions", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const wallets = pgTable("wallets", {
-  walletToken: uuid("wallet_token").primaryKey().defaultRandom(),
-  userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
-  coinBalance: bigint("coin_balance", { mode: "number" }).notNull().default(0),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const wallets = pgTable(
+  "wallets",
+  {
+    walletToken: uuid("wallet_token").primaryKey().defaultRandom(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    coinBalance: bigint("coin_balance", { mode: "number" }).notNull().default(0),
+    stripeCustomerId: text("stripe_customer_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    stripeCustomerIdx: uniqueIndex("wallets_stripe_customer_id_idx")
+      .on(t.stripeCustomerId)
+      .where(sql`${t.stripeCustomerId} is not null`),
+  })
+);
 
 export const walletLedger = pgTable(
   "wallet_ledger",
@@ -196,6 +206,32 @@ export const topups = pgTable("topups", {
   idempotencyKey: text("idempotency_key"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const savedPaymentMethods = pgTable(
+  "saved_payment_methods",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    walletToken: uuid("wallet_token").notNull().references(() => wallets.walletToken, { onDelete: "cascade" }),
+    gateway: text("gateway").notNull().default("stripe"),
+    stripeCustomerId: text("stripe_customer_id").notNull(),
+    stripePaymentMethodId: text("stripe_payment_method_id").notNull(),
+    brand: text("brand"),
+    last4: text("last4"),
+    expMonth: integer("exp_month"),
+    expYear: integer("exp_year"),
+    isDefault: boolean("is_default").notNull().default(true),
+    status: text("status").notNull().default("active"), // active|detached
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    walletIdx: index("saved_payment_methods_wallet_idx").on(t.walletToken),
+    pmIdx: uniqueIndex("saved_payment_methods_pm_idx").on(t.stripePaymentMethodId),
+    walletDefaultIdx: uniqueIndex("saved_payment_methods_wallet_default_idx")
+      .on(t.walletToken)
+      .where(sql`${t.isDefault} and ${t.status} = 'active'`),
+  })
+);
 
 export const cashouts = pgTable(
   "cashouts",

@@ -21,6 +21,7 @@ import { creatorsRouter } from "./routes/creators.js";
 import { cashoutsRouter } from "./routes/cashouts.js";
 import { kycRouter } from "./routes/kyc.js";
 import { paymentsRouter } from "./routes/payments.js";
+import { cardsRouter } from "./routes/cards.js";
 import { giftsRouter } from "./routes/gifts.js";
 import { streamsRouter } from "./routes/streams.js";
 import { challengesRouter } from "./routes/challenges.js";
@@ -85,6 +86,7 @@ export function buildApp() {
   app.use("/api/creators/kyc", kycRouter);
   app.use("/api/creators", creatorsRouter);
   app.use("/api/payments", paymentsRouter);
+  app.use("/api/payments/cards", cardsRouter);
   app.use("/api/gifts", giftsRouter);
   app.use("/api/streams", streamsRouter);
   app.use("/api/challenges", challengesRouter);

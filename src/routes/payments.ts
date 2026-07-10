@@ -1,12 +1,14 @@
 import { Router } from "express";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { wallets, topups } from "../db/schema.js";
+import { wallets, savedPaymentMethods } from "../db/schema.js";
 import { requireAuth, optionalAuth } from "../auth/middleware.js";
 import { idempotency } from "../idempotency.js";
 import { getGateway } from "../gateways/index.js";
-import { getOrCreateWallet, creditWallet } from "../ledger/wallet.js";
+import { getOrCreateWallet } from "../ledger/wallet.js";
+import { chargeWithPaymentMethod, OffSessionAuthRequiredError } from "../gateways/stripe-cards.js";
+import { recordTopupResult } from "../payments/topup.js";
 import { logger } from "../logger.js";
 import { captureException } from "../sentry.js";
 
@@ -19,12 +21,13 @@ const buyCoinsSchema = z.object({
   currency: z.string().default("USD"),
   coins: z.number().int().positive(),
   destinationAccount: z.string().optional(), // required for mobile-money methods
+  useSavedCard: z.boolean().default(false),
 }).strict();
 
 paymentsRouter.post("/buy-coins", optionalAuth(), idempotency(), async (req, res) => {
   const parsed = buyCoinsSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
-  const { method, amountCents, currency, coins, destinationAccount } = parsed.data;
+  const { method, amountCents, currency, coins, destinationAccount, useSavedCard } = parsed.data;
   const idempotencyKey = req.header("Idempotency-Key")!;
 
   if (method !== "stripe" && !destinationAccount) {
@@ -33,47 +36,56 @@ paymentsRouter.post("/buy-coins", optionalAuth(), idempotency(), async (req, res
 
   const wallet = await getOrCreateWallet(db as any, parsed.data.walletToken, req.user?.id);
 
-  const gateway = getGateway(method);
   let chargeResult;
-  try {
-    chargeResult = await gateway.charge({
-      amountCents,
-      currency,
-      destinationAccount,
-      idempotencyKey,
-      metadata: { walletToken: wallet.walletToken },
-    });
-  } catch (err) {
-    logger.error({ err, method, walletToken: wallet.walletToken }, "gateway charge failed");
-    captureException(err, { route: "/api/payments/buy-coins", method });
-    return res.status(502).json({ error: "gateway_error", message: "Payment gateway is unavailable. Try again shortly." });
-  }
+  if (method === "stripe" && useSavedCard) {
+    const [savedCard] = await db
+      .select()
+      .from(savedPaymentMethods)
+      .where(
+        and(
+          eq(savedPaymentMethods.walletToken, wallet.walletToken),
+          eq(savedPaymentMethods.isDefault, true),
+          eq(savedPaymentMethods.status, "active")
+        )
+      );
+    if (!savedCard) return res.status(409).json({ error: "no_saved_card" });
 
-  const [topup] = await db
-    .insert(topups)
-    .values({
-      walletToken: wallet.walletToken,
-      method,
-      amountCents,
-      currency,
-      coins,
-      status: chargeResult.status === "succeeded" ? "succeeded" : "pending",
-      gatewayRef: chargeResult.gatewayRef,
-      idempotencyKey,
-    })
-    .returning();
-
-  if (chargeResult.status === "succeeded") {
-    await db.transaction(async (tx) => {
-      await creditWallet(tx as any, {
-        walletToken: wallet.walletToken,
-        deltaCoins: coins,
-        reason: "topup",
-        refType: "topup",
-        refId: topup.id,
+    try {
+      chargeResult = await chargeWithPaymentMethod({
+        customerId: savedCard.stripeCustomerId,
+        paymentMethodId: savedCard.stripePaymentMethodId,
+        amountCents,
+        currency,
+        idempotencyKey,
+        offSession: true,
+        metadata: { walletToken: wallet.walletToken },
       });
-    });
+    } catch (err) {
+      if (err instanceof OffSessionAuthRequiredError) {
+        return res.status(409).json({ error: "card_requires_authentication", message: err.message });
+      }
+      logger.error({ err, method, walletToken: wallet.walletToken }, "gateway charge failed");
+      captureException(err, { route: "/api/payments/buy-coins", method });
+      return res.status(502).json({ error: "gateway_error", message: "Payment gateway is unavailable. Try again shortly." });
+    }
+  } else {
+    const gateway = getGateway(method);
+    try {
+      chargeResult = await gateway.charge({
+        amountCents,
+        currency,
+        destinationAccount,
+        idempotencyKey,
+        metadata: { walletToken: wallet.walletToken },
+      });
+    } catch (err) {
+      logger.error({ err, method, walletToken: wallet.walletToken }, "gateway charge failed");
+      captureException(err, { route: "/api/payments/buy-coins", method });
+      return res.status(502).json({ error: "gateway_error", message: "Payment gateway is unavailable. Try again shortly." });
+    }
   }
+
+  const topup = await recordTopupResult(wallet, { method, amountCents, currency, coins, idempotencyKey, chargeResult });
 
   res.status(201).json({
     topupId: topup.id,

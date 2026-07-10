@@ -1,9 +1,7 @@
-import Stripe from "stripe";
 import crypto from "crypto";
 import { env } from "../env.js";
+import { stripe } from "./stripeClient.js";
 import type { PaymentGateway, ChargeRequest, ChargeResult, PayoutRequest, PayoutResult } from "./types.js";
-
-const stripe = new Stripe(env.STRIPE_SECRET_KEY || "sk_test_placeholder", { apiVersion: "2024-04-10" });
 
 export const stripeGateway: PaymentGateway = {
   name: "stripe",
