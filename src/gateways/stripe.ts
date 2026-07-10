@@ -8,8 +8,11 @@ export const stripeGateway: PaymentGateway = {
 
   async charge(req: ChargeRequest): Promise<ChargeResult> {
     if (!env.STRIPE_SECRET_KEY) {
-      // Dev stub — no real Stripe credentials configured.
-      return { gatewayRef: `stub_${crypto.randomUUID()}`, status: "succeeded" };
+      // Dev stub — no real Stripe credentials configured. "pending", not
+      // "succeeded": matches the other gateways so an unconfigured key can
+      // never directly credit a wallet — only a verified webhook or a real
+      // confirmed charge can.
+      return { gatewayRef: `stub_${crypto.randomUUID()}`, status: "pending" };
     }
     const intent = await stripe.paymentIntents.create(
       {
@@ -29,7 +32,10 @@ export const stripeGateway: PaymentGateway = {
 
   async payout(req: PayoutRequest): Promise<PayoutResult> {
     if (!env.STRIPE_SECRET_KEY) {
-      return { gatewayRef: `stub_payout_${crypto.randomUUID()}`, status: "paid" };
+      // "processing", not "paid": matches the other gateways so an
+      // unconfigured key can never mark a cashout paid (and notify the
+      // creator as such) without money actually moving.
+      return { gatewayRef: `stub_payout_${crypto.randomUUID()}`, status: "processing" };
     }
     // In production: Stripe Connect transfer to a connected account (req.destinationAccount).
     const transfer = await stripe.transfers.create(
@@ -45,8 +51,11 @@ export const stripeGateway: PaymentGateway = {
   },
 
   verifyWebhookSignature(rawBody, headers) {
+    // No configured secret or missing signature — reject, don't trust an unsigned
+    // payload just because a webhook secret hasn't been set up.
+    if (!env.STRIPE_WEBHOOK_SECRET) return false;
     const sig = headers["stripe-signature"];
-    if (!sig || !env.STRIPE_WEBHOOK_SECRET) return !env.STRIPE_WEBHOOK_SECRET; // allow-through in dev stub mode
+    if (!sig) return false;
     try {
       stripe.webhooks.constructEvent(rawBody, sig as string, env.STRIPE_WEBHOOK_SECRET);
       return true;
