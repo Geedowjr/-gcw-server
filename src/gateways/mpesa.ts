@@ -29,8 +29,12 @@ export const mpesaGateway: PaymentGateway = {
 
   verifyWebhookSignature(rawBody, headers) {
     // Daraja callbacks are IP-allowlisted + optionally HMAC-signed depending on setup.
+    // No configured secret, or no signature to check it against, means we can't verify
+    // this payload — reject rather than trust it just because live integration isn't
+    // wired up yet (an unsigned webhook here shouldn't be able to credit a wallet).
+    if (!env.MPESA_PASSKEY) return false;
     const sig = headers["x-mpesa-signature"] as string | undefined;
-    if (!sig) return !env.MPESA_PASSKEY; // allow in stub mode
+    if (!sig) return false;
     const expected = crypto.createHmac("sha256", env.MPESA_PASSKEY).update(rawBody).digest("hex");
     return timingSafeEqualHex(sig, expected);
   },

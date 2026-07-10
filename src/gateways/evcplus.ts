@@ -23,8 +23,11 @@ export const evcPlusGateway: PaymentGateway = {
   },
 
   verifyWebhookSignature(rawBody, headers) {
+    // No configured secret or missing signature — reject, don't trust an unsigned
+    // payload just because live integration isn't wired up yet.
+    if (!env.EVC_WEBHOOK_SECRET) return false;
     const sig = headers["x-evc-signature"] as string | undefined;
-    if (!sig) return !env.EVC_WEBHOOK_SECRET;
+    if (!sig) return false;
     const expected = crypto.createHmac("sha256", env.EVC_WEBHOOK_SECRET).update(rawBody).digest("hex");
     return timingSafeEqualHex(sig, expected);
   },
