@@ -1,6 +1,7 @@
 import { Router } from "express";
+import crypto from "crypto";
 import { z } from "zod";
-import { eq, desc, lt, and } from "drizzle-orm";
+import { eq, desc, lt, and, isNull } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { creatorProfiles, users, cashouts } from "../db/schema.js";
 import { requireAuth } from "../auth/middleware.js";
@@ -92,4 +93,43 @@ creatorsRouter.get("/cashouts", requireAuth(), async (req, res) => {
     })),
     nextCursor,
   });
+});
+
+/** Atomic compare-and-set: only writes if no token exists yet, so two
+ * concurrent requests for the same creator can't each generate a different
+ * token and race to persist it — mirrors getOrCreateStripeCustomer. */
+async function getOrCreateOverlayToken(userId: string, existingToken: string | null): Promise<string> {
+  if (existingToken) return existingToken;
+
+  const token = crypto.randomBytes(32).toString("hex");
+  const [updated] = await db
+    .update(creatorProfiles)
+    .set({ overlayToken: token, updatedAt: new Date() })
+    .where(and(eq(creatorProfiles.userId, userId), isNull(creatorProfiles.overlayToken)))
+    .returning();
+  if (updated) return token;
+
+  const [current] = await db.select().from(creatorProfiles).where(eq(creatorProfiles.userId, userId));
+  return current!.overlayToken!;
+}
+
+creatorsRouter.get("/overlay-token", requireAuth(), async (req, res) => {
+  const [profile] = await db.select().from(creatorProfiles).where(eq(creatorProfiles.userId, req.user!.id));
+  if (!profile) return res.status(404).json({ error: "not_found" });
+
+  const overlayToken = await getOrCreateOverlayToken(req.user!.id, profile.overlayToken);
+  res.json({ overlayToken });
+});
+
+creatorsRouter.post("/overlay-token/regenerate", requireAuth(), async (req, res) => {
+  const [profile] = await db.select().from(creatorProfiles).where(eq(creatorProfiles.userId, req.user!.id));
+  if (!profile) return res.status(404).json({ error: "not_found" });
+
+  const overlayToken = crypto.randomBytes(32).toString("hex");
+  await db
+    .update(creatorProfiles)
+    .set({ overlayToken, updatedAt: new Date() })
+    .where(eq(creatorProfiles.userId, req.user!.id));
+
+  res.json({ overlayToken });
 });

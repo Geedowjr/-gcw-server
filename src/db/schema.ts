@@ -72,18 +72,31 @@ export const passwordResets = pgTable("password_resets", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const creatorProfiles = pgTable("creator_profiles", {
-  userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
-  lifetimeCoins: bigint("lifetime_coins", { mode: "number" }).notNull().default(0),
-  lifetimeEarningsCents: bigint("lifetime_earnings_cents", { mode: "number" }).notNull().default(0),
-  payoutBalanceCents: bigint("payout_balance_cents", { mode: "number" }).notNull().default(0),
-  pendingBalanceCents: bigint("pending_balance_cents", { mode: "number" }).notNull().default(0),
-  currentLevel: integer("current_level").notNull().default(1),
-  kycStatus: text("kyc_status").notNull().default("none"), // none|pending|approved|rejected
-  payoutCountry: text("payout_country"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const creatorProfiles = pgTable(
+  "creator_profiles",
+  {
+    userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+    lifetimeCoins: bigint("lifetime_coins", { mode: "number" }).notNull().default(0),
+    lifetimeEarningsCents: bigint("lifetime_earnings_cents", { mode: "number" }).notNull().default(0),
+    payoutBalanceCents: bigint("payout_balance_cents", { mode: "number" }).notNull().default(0),
+    pendingBalanceCents: bigint("pending_balance_cents", { mode: "number" }).notNull().default(0),
+    currentLevel: integer("current_level").notNull().default(1),
+    kycStatus: text("kyc_status").notNull().default("none"), // none|pending|approved|rejected
+    payoutCountry: text("payout_country"),
+    // Long-lived secret for the token-based /overlay?token=... URL, so an OBS
+    // browser source (a separate, unauthenticated browser instance) can join
+    // this creator's gift-event room without an interactive login. Lazily
+    // generated on first request, nullable until then.
+    overlayToken: text("overlay_token"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    overlayTokenIdx: uniqueIndex("creator_profiles_overlay_token_idx")
+      .on(t.overlayToken)
+      .where(sql`${t.overlayToken} is not null`),
+  })
+);
 
 export const kycSubmissions = pgTable("kyc_submissions", {
   id: uuid("id").primaryKey().defaultRandom(),

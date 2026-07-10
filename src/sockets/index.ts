@@ -1,10 +1,13 @@
 import type { Server as HttpServer } from "http";
 import { Server } from "socket.io";
 import { createAdapter } from "@socket.io/redis-adapter";
+import { eq } from "drizzle-orm";
 import { createRedisClient } from "../redis.js";
 import { verifyAccessToken } from "../auth/jwt.js";
 import { corsOrigins } from "../env.js";
 import { logger } from "../logger.js";
+import { db } from "../db/client.js";
+import { creatorProfiles } from "../db/schema.js";
 
 let io: Server | undefined;
 
@@ -18,9 +21,10 @@ export function initSockets(httpServer: HttpServer) {
   const subClient = pubClient.duplicate();
   io.adapter(createAdapter(pubClient, subClient));
 
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     const token = socket.handshake.auth?.token as string | undefined;
     const walletToken = socket.handshake.auth?.walletToken as string | undefined;
+    const overlayToken = socket.handshake.auth?.overlayToken as string | undefined;
 
     if (token) {
       try {
@@ -30,6 +34,20 @@ export function initSockets(httpServer: HttpServer) {
         socket.data.username = payload.username;
       } catch {
         // fall through to anonymous — invalid/expired tokens don't hard-fail the socket
+      }
+    } else if (overlayToken) {
+      // OBS browser sources are separate, unauthenticated browser instances
+      // with no shared login session — /overlay?token=... resolves straight
+      // to the owning creator's userId so it can join creator:<userId>,
+      // without needing an interactive login.
+      try {
+        const [profile] = await db
+          .select()
+          .from(creatorProfiles)
+          .where(eq(creatorProfiles.overlayToken, overlayToken));
+        if (profile) socket.data.userId = profile.userId;
+      } catch {
+        // fall through to anonymous — a DB hiccup here shouldn't hard-fail the socket
       }
     }
     if (walletToken) socket.data.walletToken = walletToken;
