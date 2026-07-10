@@ -68,7 +68,8 @@ describe("cashout requirements: KYC + 2FA + minimum + hold window", () => {
       .post("/api/creators/cashout")
       .set("Authorization", `Bearer ${accessToken}`)
       .set("Idempotency-Key", randomUUID())
-      .send({ destinationType: "mpesa", destinationAccount: "254700000000", amountCents: 500, totp: code });
+      .set("x-totp-code", code) // cashoutSchema is .strict() and has no totp field — matches the real frontend
+      .send({ destinationType: "mpesa", destinationAccount: "254700000000", amountCents: 500 });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("below_minimum_cashout");
