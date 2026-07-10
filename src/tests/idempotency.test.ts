@@ -1,9 +1,28 @@
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "crypto";
 import request from "supertest";
-import { app, closeAll } from "./setup.js";
+
+// This test verifies idempotency-key semantics, not real Stripe behavior —
+// it must always exercise the gateway's dev-stub path, never a live network
+// call. env.ts reads process.env at import time (dotenv never overrides an
+// already-set key), so we set this before dynamically importing setup.js
+// (a static import here would get hoisted above the assignment and run
+// too early). Otherwise this test silently depends on whatever
+// STRIPE_SECRET_KEY happens to be in the local .env.
+process.env.STRIPE_SECRET_KEY = "";
+
+let app: Awaited<ReturnType<typeof importSetup>>["app"];
+let closeAll: Awaited<ReturnType<typeof importSetup>>["closeAll"];
+
+function importSetup() {
+  return import("./setup.js");
+}
 
 describe("buy-coins idempotency", () => {
+  beforeAll(async () => {
+    ({ app, closeAll } = await importSetup());
+  });
+
   it("requires an Idempotency-Key header", async () => {
     const res = await request(app).post("/api/payments/buy-coins").send({
       method: "stripe",
