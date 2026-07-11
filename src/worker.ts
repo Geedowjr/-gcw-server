@@ -1,4 +1,5 @@
 import "dotenv/config";
+import http from "http";
 import { Worker } from "bullmq";
 import { createRedisClient } from "./redis.js";
 import { logger } from "./logger.js";
@@ -12,6 +13,21 @@ import { processFxSnapshotJob } from "./jobs/fx-snapshot.job.js";
 import { queues } from "./jobs/queues.js";
 
 initSentry();
+
+// Fly has no way to know this process is alive without a check to poll — the
+// worker previously had zero health checks, so a stopped/never-started
+// machine was silently accepted as "fine" and never auto-restarted. This
+// listener exists purely for that check (see fly.toml's worker [[services]]
+// block); it carries no traffic and does no request handling of its own.
+const WORKER_HEALTH_PORT = 4001;
+http
+  .createServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+  })
+  .listen(WORKER_HEALTH_PORT, () => {
+    logger.info({ port: WORKER_HEALTH_PORT }, "worker health check listener started");
+  });
 
 const connection = createRedisClient({ forBullMQ: true });
 

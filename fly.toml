@@ -41,3 +41,27 @@ primary_region = "arn"
   cpus = 1
   memory_mb = 512
   restart = { policy = "always" }
+
+# Gives Fly a way to detect that the worker machine is actually running and
+# restart it if it isn't. Without this, worker machines had zero checks at
+# all — a machine left stopped after a deploy was silently treated as "fine"
+# and nothing ever started it back up, so no background job (payouts,
+# webhook reconciliation, the hourly earnings-promotion job) was being
+# processed. Port 4001 only ever answers {"ok":true} — see worker.ts.
+[[services]]
+  internal_port = 4001
+  protocol = "tcp"
+  processes = ["worker"]
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 4001
+
+  [[services.http_checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "15s"
+    method = "GET"
+    path = "/healthz"
