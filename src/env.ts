@@ -24,9 +24,13 @@ const schema = z.object({
   MPESA_PASSKEY: z.string().default(""),
   MPESA_CALLBACK_URL: z.string().default(""),
 
-  EVC_MERCHANT_ID: z.string().default(""),
-  EVC_API_KEY: z.string().default(""),
+  EVC_MERCHANT_ID: z.string().default(""), // WaafiPay merchantUid
+  EVC_API_USER_ID: z.string().default(""), // WaafiPay apiUserId
+  EVC_API_KEY: z.string().default(""), // WaafiPay apiKey
   EVC_WEBHOOK_SECRET: z.string().default(""),
+  // Defaults to sandbox even once credentials are set — must be explicitly
+  // flipped to false to charge real money. See src/gateways/evcplus.ts.
+  EVC_SANDBOX: z.coerce.boolean().default(true),
 
   EDAHAB_API_KEY: z.string().default(""),
   EDAHAB_MERCHANT_ID: z.string().default(""),
