@@ -31,13 +31,24 @@ http
 
 const connection = createRedisClient({ forBullMQ: true });
 
+// Each idle Worker long-polls Redis for new jobs and separately re-checks
+// for stalled jobs on its own timer — with 6 workers, BullMQ's defaults
+// (drainDelay: 5s, stalledInterval: 30s) add up to meaningful continuous
+// Redis command volume even with zero real jobs to process. Relaxing both
+// doesn't affect real job pickup: a genuinely new job wakes the blocking
+// Redis call immediately regardless of drainDelay (it's the long-poll
+// timeout for the empty-queue case, not a fixed scan interval) — this only
+// slows down the idle re-check cadence, which is fine for jobs that are
+// already hourly/nightly or triggered by real user actions, not sub-minute.
+const WORKER_TUNING = { drainDelay: 30, stalledInterval: 60_000 };
+
 const workers = [
-  new Worker("payout", processPayoutJob, { connection, concurrency: 5 }),
-  new Worker("webhook-retry", processWebhookRetryJob, { connection, concurrency: 10 }),
-  new Worker("email", processEmailJob, { connection, concurrency: 10 }),
-  new Worker("reconcile", processReconcileJob, { connection, concurrency: 1 }),
-  new Worker("promote-pending", processPromotePendingJob, { connection, concurrency: 1 }),
-  new Worker("fx-snapshot", processFxSnapshotJob, { connection, concurrency: 1 }),
+  new Worker("payout", processPayoutJob, { connection, concurrency: 5, ...WORKER_TUNING }),
+  new Worker("webhook-retry", processWebhookRetryJob, { connection, concurrency: 10, ...WORKER_TUNING }),
+  new Worker("email", processEmailJob, { connection, concurrency: 10, ...WORKER_TUNING }),
+  new Worker("reconcile", processReconcileJob, { connection, concurrency: 1, ...WORKER_TUNING }),
+  new Worker("promote-pending", processPromotePendingJob, { connection, concurrency: 1, ...WORKER_TUNING }),
+  new Worker("fx-snapshot", processFxSnapshotJob, { connection, concurrency: 1, ...WORKER_TUNING }),
 ];
 
 for (const worker of workers) {

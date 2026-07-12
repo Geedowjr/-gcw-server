@@ -51,14 +51,11 @@ export function buildApp() {
   app.use(cors({ origin: corsOrigins, credentials: true }));
   app.use(httpLogger);
   app.use(metricsMiddleware());
-  app.use(globalLimiter);
 
-  // Webhooks need the RAW request body for signature verification — mount
-  // BEFORE express.json() and use express.raw() scoped to this router only.
-  app.use("/api/public/webhooks", express.raw({ type: "*/*", limit: "2mb" }), webhooksRouter);
-
-  app.use(express.json({ limit: "2mb" }));
-
+  // Health/readiness/metrics are polled continuously by Fly's own
+  // infrastructure (every 15s per fly.toml, forever) — they don't need
+  // abuse-rate-limiting, and registering them before globalLimiter means
+  // that guaranteed, non-user-driven traffic never touches Redis at all.
   app.get("/healthz", (_req, res) => res.json({ ok: true }));
 
   app.get("/readyz", async (_req, res) => {
@@ -76,6 +73,14 @@ export function buildApp() {
     res.setHeader("Content-Type", register.contentType);
     res.send(await register.metrics());
   });
+
+  app.use(globalLimiter);
+
+  // Webhooks need the RAW request body for signature verification — mount
+  // BEFORE express.json() and use express.raw() scoped to this router only.
+  app.use("/api/public/webhooks", express.raw({ type: "*/*", limit: "2mb" }), webhooksRouter);
+
+  app.use(express.json({ limit: "2mb" }));
 
   const openApiSpec = buildOpenApiSpec();
   app.get("/openapi.json", (_req, res) => res.json(openApiSpec));
