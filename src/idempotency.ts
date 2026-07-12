@@ -1,6 +1,8 @@
 import type { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 import { redis } from "./redis.js";
+import { logger } from "./logger.js";
+import { captureException } from "./sentry.js";
 
 const TTL_SECONDS = 24 * 60 * 60;
 
@@ -12,6 +14,10 @@ const TTL_SECONDS = 24 * 60 * 60;
  *   the underlying handler never runs again.
  * - Key seen again while the FIRST request is still in-flight: 409 Conflict
  *   (prevents double-processing under concurrent duplicate requests).
+ * - Redis itself unavailable -> 503, not a generic 500. Deliberately fails
+ *   closed (rejects) rather than skipping the dedup check: unlike the rate
+ *   limiter, this guards against actually double-charging a card or
+ *   double-crediting a wallet, so silently proceeding without it isn't safe.
  */
 export function idempotency() {
   return async (req: Request, res: Response, next: NextFunction) => {
@@ -24,13 +30,20 @@ export function idempotency() {
     const cacheKey = `idem:${userId}:${req.baseUrl}${req.path}:${key}`;
     const lockKey = `${cacheKey}:lock`;
 
-    const cached = await redis.get(cacheKey);
-    if (cached) {
-      const parsed = JSON.parse(cached);
-      return res.status(parsed.statusCode).json(parsed.body);
+    let cached: string | null;
+    let gotLock: string | null;
+    try {
+      cached = await redis.get(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        return res.status(parsed.statusCode).json(parsed.body);
+      }
+      gotLock = await redis.set(lockKey, "1", "EX", 30, "NX");
+    } catch (err) {
+      logger.error({ err }, "idempotency check failed — Redis unavailable");
+      captureException(err, { route: req.path });
+      return res.status(503).json({ error: "idempotency_check_unavailable", message: "Try again shortly." });
     }
-
-    const gotLock = await redis.set(lockKey, "1", "EX", 30, "NX");
     if (!gotLock) {
       return res.status(409).json({ error: "duplicate_request_in_flight" });
     }
